@@ -1,0 +1,85 @@
+name: Build Windows application
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-desktop-build
+  cancel-in-progress: false
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          architecture: x64
+          cache: pip
+      - name: Install build dependencies
+        run: python -m pip install -r requirements-build.txt
+      - name: Build single executable
+        shell: pwsh
+        run: ./scripts/build_windows.ps1
+      - name: Test the executable and persisted data on Windows
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $smoke = Join-Path $env:RUNNER_TEMP 'OblivionDoc-smoke'
+          New-Item -ItemType Directory -Force $smoke | Out-Null
+          foreach ($phase in @('create', 'verify')) {
+            $report = Join-Path $smoke "$phase.json"
+            $arguments = "--data-dir `"$smoke`" --smoke-test $phase --report `"$report`""
+            $process = Start-Process -FilePath (Resolve-Path 'dist/OblivionDoc.exe') -ArgumentList $arguments -PassThru -Wait
+            if (Test-Path $report) { Get-Content $report }
+            if ($process.ExitCode -ne 0) {
+              if (Test-Path "$smoke/application.log") { Get-Content "$smoke/application.log" }
+              if (Test-Path "$smoke/runtime.log") { Get-Content "$smoke/runtime.log" }
+              throw "Executable test failed: $phase ($($process.ExitCode))"
+            }
+            if (!(Get-Content $report -Raw | ConvertFrom-Json).ok) { throw 'Missing success report' }
+          }
+          Copy-Item "$smoke/create.json" 'dist/windows-create.json'
+          Copy-Item "$smoke/verify.json" 'dist/windows-verify.json'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: OblivionDoc-Windows-x64
+          path: dist/*
+      - name: Publish tested binary to the download branch
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const crypto = require('crypto');
+            const {owner, repo} = context.repo;
+            const bytes = fs.readFileSync('dist/OblivionDoc.exe');
+            if (bytes.length > 95 * 1024 * 1024) throw new Error('Executable exceeds GitHub file size limit');
+            const checksum = crypto.createHash('sha256').update(bytes).digest('hex');
+            const manifest = {
+              source_commit: context.sha,
+              platform: 'Windows 10/11 x64',
+              filename: 'OblivionDoc.exe',
+              bytes: bytes.length,
+              sha256: checksum,
+              checks: ['create', 'verify'].map(phase => JSON.parse(fs.readFileSync(`dist/windows-${phase}.json`, 'utf8')))
+            };
+            const binary = await github.rest.git.createBlob({owner, repo, encoding: 'base64', content: bytes.toString('base64')});
+            let parent;
+            try { parent = (await github.rest.git.getRef({owner, repo, ref: 'heads/windows-build'})).data.object.sha; }
+            catch (error) { if (error.status !== 404) throw error; }
+            const tree = await github.rest.git.createTree({owner, repo, tree: [
+              {path:'OblivionDoc.exe', mode:'100644', type:'blob', sha:binary.data.sha},
+              {path:'build-info.json', mode:'100644', type:'blob', content:JSON.stringify(manifest, null, 2)},
+              {path:'SHA256SUMS', mode:'100644', type:'blob', content:`${checksum}  OblivionDoc.exe\n`}
+            ]});
+            const commit = await github.rest.git.createCommit({owner, repo, message:`Windows build from ${context.sha}`, tree:tree.data.sha, parents:parent ? [parent] : []});
+            if (parent) await github.rest.git.updateRef({owner, repo, ref:'heads/windows-build', sha:commit.data.sha});
+            else await github.rest.git.createRef({owner, repo, ref:'refs/heads/windows-build', sha:commit.data.sha});
+            core.notice(`Tested EXE: ${bytes.length} bytes; SHA256 ${checksum}`);
