@@ -8,16 +8,18 @@ import {
   type DocumentInput,
   type Role,
 } from "../archive/types";
-import { saveDocument, validateFile } from "../archive/database";
+import { type ArchiveDatabase, validateFile } from "../archive/database";
 import { formatBytes, offsetDate, today } from "../archive/format";
 
 export function DocumentForm({
+  database,
   existing,
   defaultAuthor,
   role,
   onClose,
   onSaved,
 }: {
+  database: ArchiveDatabase;
   existing?: ArchiveDocument;
   defaultAuthor?: string;
   role: Role;
@@ -67,7 +69,7 @@ export function DocumentForm({
     }
     setBusy(true);
     try {
-      const record = await saveDocument(input, file, role, existing);
+      const record = await database.saveDocument(input, file, role, existing);
       await onSaved(record);
     } catch (e) {
       setError((e as Error).message);

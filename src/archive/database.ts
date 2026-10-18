@@ -13,7 +13,6 @@ import {
 } from "./types";
 import { offsetDate, today } from "./format";
 
-const NAME = "obliviondoc-archive";
 export const MAX_FILE_BYTES = 20 * 1024 * 1024;
 const MAX_TOTAL_BYTES = 100 * 1024 * 1024;
 const EXTENSIONS = new Set([
@@ -29,51 +28,6 @@ const EXTENSIONS = new Set([
   "jpeg",
   "webp",
 ]);
-let connection: Promise<IDBDatabase> | undefined;
-function open() {
-  if (!connection)
-    connection = new Promise((resolve, reject) => {
-      if (!globalThis.indexedDB) {
-        reject(
-          new Error(
-            "Браузер не поддерживает локальное хранилище. Откройте сайт в современном браузере.",
-          ),
-        );
-        return;
-      }
-      const request = indexedDB.open(NAME, 1);
-      request.onupgradeneeded = () => {
-        const db = request.result;
-        db.createObjectStore("documents", { keyPath: "id" });
-        db.createObjectStore("files", { keyPath: "id" });
-        db.createObjectStore("events", { keyPath: "id", autoIncrement: true });
-        db.createObjectStore("meta", { keyPath: "id" });
-      };
-      request.onerror = () => {
-        connection = undefined;
-        reject(
-          new Error(
-            "Не удалось открыть локальное хранилище. Проверьте настройки браузера.",
-          ),
-        );
-      };
-      request.onblocked = () => {
-        connection = undefined;
-        reject(
-          new Error("Закройте другие вкладки OblivionDoc и повторите попытку."),
-        );
-      };
-      request.onsuccess = () => {
-        const db = request.result;
-        db.onversionchange = () => {
-          db.close();
-          connection = undefined;
-        };
-        resolve(db);
-      };
-    });
-  return connection;
-}
 function complete(tx: IDBTransaction) {
   return new Promise<void>((resolve, reject) => {
     tx.oncomplete = () => resolve();
@@ -228,43 +182,6 @@ function seeds() {
     },
   );
 }
-export async function initialize() {
-  const db = await open();
-  const tx = db.transaction(
-    ["documents", "files", "events", "meta"],
-    "readwrite",
-  );
-  const finished = complete(tx);
-  const flag = tx.objectStore("meta").get("initialized");
-  flag.onsuccess = () => {
-    if (flag.result) return;
-    for (const { document, blob } of seeds()) {
-      tx.objectStore("documents").add(document);
-      tx.objectStore("files").add({ id: document.id, blob });
-    }
-    tx.objectStore("events").add({
-      action: "created",
-      title: "Добавлены 8 примеров документов",
-      actor: "Демо-система",
-      at: new Date().toISOString(),
-    });
-    tx.objectStore("meta").add({ id: "initialized", date: today() });
-  };
-  await finished;
-  return snapshot();
-}
-export async function snapshot(): Promise<Snapshot> {
-  const db = await open();
-  const tx = db.transaction(["documents", "events"], "readonly");
-  const [documents, events] = await Promise.all([
-    read<ArchiveDocument[]>(tx.objectStore("documents").getAll()),
-    read<AuditEvent[]>(tx.objectStore("events").getAll()),
-  ]);
-  return {
-    documents,
-    events: events.sort((a, b) => (b.id || 0) - (a.id || 0)),
-  };
-}
 export function validateFile(file: File) {
   if (!EXTENSIONS.has(file.name.split(".").at(-1)?.toLowerCase() || ""))
     throw new Error(
@@ -277,144 +194,251 @@ export function validateFile(file: File) {
       "Размер файла превышает 20 МБ. Выберите файл меньшего размера.",
     );
 }
-export async function saveDocument(
-  input: DocumentInput,
-  file: File | undefined,
-  role: Role,
-  existing?: ArchiveDocument,
-) {
-  if (!canEdit(role))
-    throw new Error("Эта демо-роль позволяет только просматривать документы.");
-  if (
-    !input.title.trim() ||
-    !input.author.trim() ||
-    !input.documentDate ||
-    (!input.retainUntil && input.retainUntil !== null)
-  )
-    throw new Error("Заполните обязательные поля карточки.");
-  if (
-    !CATEGORIES.includes(input.category) ||
-    !DEPARTMENTS.includes(input.department as (typeof DEPARTMENTS)[number]) ||
-    !["all", "staff"].includes(input.visibility)
-  )
-    throw new Error("Проверьте раздел, подразделение и доступ.");
-  const validDate = (value: string) =>
-    /^\d{4}-\d{2}-\d{2}$/.test(value) &&
-    !Number.isNaN(Date.parse(`${value}T12:00:00`));
-  if (
-    !validDate(input.documentDate) ||
-    (input.retainUntil &&
-      (!validDate(input.retainUntil) || input.retainUntil < input.documentDate))
-  )
-    throw new Error("Срок хранения не может быть раньше даты документа.");
-  if (!file && !existing) throw new Error("Выберите файл для загрузки.");
-  if (file) validateFile(file);
-  const db = await open();
-  const tx = db.transaction(["documents", "files", "events"], "readwrite");
-  const finished = complete(tx);
-  let issue = "";
-  const all = tx.objectStore("documents").getAll();
-  let saved: ArchiveDocument;
-  all.onsuccess = () => {
-    const documents = all.result as ArchiveDocument[];
-    if (existing && !documents.some((d) => d.id === existing.id)) {
-      issue = "Документ уже удалён в другой вкладке.";
-      tx.abort();
-      return;
-    }
-    const bytes =
-      documents
-        .filter((d) => d.id !== existing?.id)
-        .reduce((sum, d) => sum + d.size, 0) +
-      (file?.size ?? existing?.size ?? 0);
-    if (bytes > MAX_TOTAL_BYTES) {
-      issue =
-        "Демо-архив ограничен 100 МБ. Удалите ненужные тестовые файлы или выберите файл меньшего размера.";
-      tx.abort();
-      return;
-    }
-    const now = new Date().toISOString();
-    saved = {
-      ...existing,
-      ...input,
-      title: input.title.trim(),
-      number: input.number.trim(),
-      author: input.author.trim(),
-      id: existing?.id || crypto.randomUUID(),
-      status: existing?.status || "active",
-      createdAt: existing?.createdAt || now,
-      updatedAt: now,
-      fileName: file?.name || existing!.fileName,
-      mimeType: file?.type || existing?.mimeType || "application/octet-stream",
-      size: file?.size ?? existing!.size,
-      example: existing?.example && !file,
-    };
-    tx.objectStore("documents").put(saved);
-    if (file) tx.objectStore("files").put({ id: saved.id, blob: file });
-    event(tx, existing ? "updated" : "created", saved.title, role);
-  };
-  try {
-    await finished;
-  } catch (error) {
-    throw issue ? new Error(issue) : error;
+
+export function createArchiveDatabase(name: string, includeExamples = false) {
+  let connection: Promise<IDBDatabase> | undefined;
+  function open() {
+    if (!connection)
+      connection = new Promise((resolve, reject) => {
+        if (!globalThis.indexedDB) {
+          reject(
+            new Error(
+              "Браузер не поддерживает локальное хранилище. Откройте сайт в современном браузере.",
+            ),
+          );
+          return;
+        }
+        const request = indexedDB.open(name, 1);
+        request.onupgradeneeded = () => {
+          const db = request.result;
+          db.createObjectStore("documents", { keyPath: "id" });
+          db.createObjectStore("files", { keyPath: "id" });
+          db.createObjectStore("events", {
+            keyPath: "id",
+            autoIncrement: true,
+          });
+          db.createObjectStore("meta", { keyPath: "id" });
+        };
+        request.onerror = () => {
+          connection = undefined;
+          reject(
+            new Error(
+              "Не удалось открыть локальное хранилище. Проверьте настройки браузера.",
+            ),
+          );
+        };
+        request.onblocked = () => {
+          connection = undefined;
+          reject(
+            new Error(
+              "Закройте другие вкладки OblivionDoc и повторите попытку.",
+            ),
+          );
+        };
+        request.onsuccess = () => {
+          const db = request.result;
+          db.onversionchange = () => {
+            db.close();
+            connection = undefined;
+          };
+          resolve(db);
+        };
+      });
+    return connection;
   }
-  return saved!;
-}
-export async function fileFor(
-  document: ArchiveDocument,
-  role: Role,
-  action: "viewed" | "downloaded",
-) {
-  if (!visibleTo(document, role))
-    throw new Error("Документ недоступен для выбранной демо-роли.");
-  const db = await open();
-  const tx = db.transaction(["files", "events"], "readwrite");
-  const finished = complete(tx);
-  const stored = await read<{ id: string; blob: Blob } | undefined>(
-    tx.objectStore("files").get(document.id),
-  );
-  if (stored) event(tx, action, document.title, role);
-  await finished;
-  if (!stored) throw new Error("Файл не найден в этом браузере.");
-  return stored.blob;
-}
-export async function changeStatus(document: ArchiveDocument, role: Role) {
-  if (!canEdit(role)) throw new Error("Недостаточно прав выбранной демо-роли.");
-  const db = await open();
-  const tx = db.transaction(["documents", "events"], "readwrite");
-  const finished = complete(tx);
-  const request = tx.objectStore("documents").get(document.id);
-  request.onsuccess = () => {
-    const current = request.result as ArchiveDocument | undefined;
-    if (!current) {
-      tx.abort();
-      return;
+  async function initialize() {
+    const db = await open();
+    const tx = db.transaction(
+      ["documents", "files", "events", "meta"],
+      "readwrite",
+    );
+    const finished = complete(tx);
+    const flag = tx.objectStore("meta").get("initialized");
+    flag.onsuccess = () => {
+      if (flag.result) return;
+      for (const { document, blob } of includeExamples ? seeds() : []) {
+        tx.objectStore("documents").add(document);
+        tx.objectStore("files").add({ id: document.id, blob });
+      }
+      if (includeExamples)
+        tx.objectStore("events").add({
+          action: "created",
+          title: "Добавлены 8 примеров документов",
+          actor: "Демо-система",
+          at: new Date().toISOString(),
+        });
+      tx.objectStore("meta").add({ id: "initialized", date: today() });
+    };
+    await finished;
+    return snapshot();
+  }
+  async function snapshot(): Promise<Snapshot> {
+    const db = await open();
+    const tx = db.transaction(["documents", "events"], "readonly");
+    const [documents, events] = await Promise.all([
+      read<ArchiveDocument[]>(tx.objectStore("documents").getAll()),
+      read<AuditEvent[]>(tx.objectStore("events").getAll()),
+    ]);
+    return {
+      documents,
+      events: events.sort((a, b) => (b.id || 0) - (a.id || 0)),
+    };
+  }
+  async function saveDocument(
+    input: DocumentInput,
+    file: File | undefined,
+    role: Role,
+    existing?: ArchiveDocument,
+  ) {
+    if (!canEdit(role))
+      throw new Error(
+        "Эта демо-роль позволяет только просматривать документы.",
+      );
+    if (
+      !input.title.trim() ||
+      !input.author.trim() ||
+      !input.documentDate ||
+      (!input.retainUntil && input.retainUntil !== null)
+    )
+      throw new Error("Заполните обязательные поля карточки.");
+    if (
+      !CATEGORIES.includes(input.category) ||
+      !DEPARTMENTS.includes(input.department as (typeof DEPARTMENTS)[number]) ||
+      !["all", "staff"].includes(input.visibility)
+    )
+      throw new Error("Проверьте раздел, подразделение и доступ.");
+    const validDate = (value: string) =>
+      /^\d{4}-\d{2}-\d{2}$/.test(value) &&
+      !Number.isNaN(Date.parse(`${value}T12:00:00`));
+    if (
+      !validDate(input.documentDate) ||
+      (input.retainUntil &&
+        (!validDate(input.retainUntil) ||
+          input.retainUntil < input.documentDate))
+    )
+      throw new Error("Срок хранения не может быть раньше даты документа.");
+    if (!file && !existing) throw new Error("Выберите файл для загрузки.");
+    if (file) validateFile(file);
+    const db = await open();
+    const tx = db.transaction(["documents", "files", "events"], "readwrite");
+    const finished = complete(tx);
+    let issue = "";
+    const all = tx.objectStore("documents").getAll();
+    let saved: ArchiveDocument;
+    all.onsuccess = () => {
+      const documents = all.result as ArchiveDocument[];
+      if (existing && !documents.some((d) => d.id === existing.id)) {
+        issue = "Документ уже удалён в другой вкладке.";
+        tx.abort();
+        return;
+      }
+      const bytes =
+        documents
+          .filter((d) => d.id !== existing?.id)
+          .reduce((sum, d) => sum + d.size, 0) +
+        (file?.size ?? existing?.size ?? 0);
+      if (bytes > MAX_TOTAL_BYTES) {
+        issue =
+          "Демо-архив ограничен 100 МБ. Удалите ненужные тестовые файлы или выберите файл меньшего размера.";
+        tx.abort();
+        return;
+      }
+      const now = new Date().toISOString();
+      saved = {
+        ...existing,
+        ...input,
+        title: input.title.trim(),
+        number: input.number.trim(),
+        author: input.author.trim(),
+        id: existing?.id || crypto.randomUUID(),
+        status: existing?.status || "active",
+        createdAt: existing?.createdAt || now,
+        updatedAt: now,
+        fileName: file?.name || existing!.fileName,
+        mimeType:
+          file?.type || existing?.mimeType || "application/octet-stream",
+        size: file?.size ?? existing!.size,
+        example: existing?.example && !file,
+      };
+      tx.objectStore("documents").put(saved);
+      if (file) tx.objectStore("files").put({ id: saved.id, blob: file });
+      event(tx, existing ? "updated" : "created", saved.title, role);
+    };
+    try {
+      await finished;
+    } catch (error) {
+      throw issue ? new Error(issue) : error;
     }
-    const archived = current.status === "active";
-    tx.objectStore("documents").put({
-      ...current,
-      status: archived ? "archived" : "active",
-      updatedAt: new Date().toISOString(),
-    });
-    event(tx, archived ? "archived" : "restored", current.title, role);
+    return saved!;
+  }
+  async function fileFor(
+    document: ArchiveDocument,
+    role: Role,
+    action: "viewed" | "downloaded",
+  ) {
+    if (!visibleTo(document, role))
+      throw new Error("Документ недоступен для выбранной демо-роли.");
+    const db = await open();
+    const tx = db.transaction(["files", "events"], "readwrite");
+    const finished = complete(tx);
+    const stored = await read<{ id: string; blob: Blob } | undefined>(
+      tx.objectStore("files").get(document.id),
+    );
+    if (stored) event(tx, action, document.title, role);
+    await finished;
+    if (!stored) throw new Error("Файл не найден в этом браузере.");
+    return stored.blob;
+  }
+  async function changeStatus(document: ArchiveDocument, role: Role) {
+    if (!canEdit(role))
+      throw new Error("Недостаточно прав выбранной демо-роли.");
+    const db = await open();
+    const tx = db.transaction(["documents", "events"], "readwrite");
+    const finished = complete(tx);
+    const request = tx.objectStore("documents").get(document.id);
+    request.onsuccess = () => {
+      const current = request.result as ArchiveDocument | undefined;
+      if (!current) {
+        tx.abort();
+        return;
+      }
+      const archived = current.status === "active";
+      tx.objectStore("documents").put({
+        ...current,
+        status: archived ? "archived" : "active",
+        updatedAt: new Date().toISOString(),
+      });
+      event(tx, archived ? "archived" : "restored", current.title, role);
+    };
+    await finished;
+  }
+  async function removeDocument(document: ArchiveDocument, role: Role) {
+    if (role !== "admin")
+      throw new Error("Удаление доступно только демо-администратору.");
+    const db = await open();
+    const tx = db.transaction(["documents", "files", "events"], "readwrite");
+    const finished = complete(tx);
+    tx.objectStore("documents").delete(document.id);
+    tx.objectStore("files").delete(document.id);
+    event(tx, "deleted", document.title, role);
+    await finished;
+  }
+  async function recordExport(count: number, role: Role) {
+    const db = await open();
+    const tx = db.transaction("events", "readwrite");
+    const finished = complete(tx);
+    event(tx, "exported", `Экспорт реестра: ${count} записей`, role);
+    await finished;
+  }
+
+  return {
+    initialize,
+    snapshot,
+    saveDocument,
+    fileFor,
+    changeStatus,
+    removeDocument,
+    recordExport,
   };
-  await finished;
 }
-export async function removeDocument(document: ArchiveDocument, role: Role) {
-  if (role !== "admin")
-    throw new Error("Удаление доступно только демо-администратору.");
-  const db = await open();
-  const tx = db.transaction(["documents", "files", "events"], "readwrite");
-  const finished = complete(tx);
-  tx.objectStore("documents").delete(document.id);
-  tx.objectStore("files").delete(document.id);
-  event(tx, "deleted", document.title, role);
-  await finished;
-}
-export async function recordExport(count: number, role: Role) {
-  const db = await open();
-  const tx = db.transaction("events", "readwrite");
-  const finished = complete(tx);
-  event(tx, "exported", `Экспорт реестра: ${count} записей`, role);
-  await finished;
-}
+export type ArchiveDatabase = ReturnType<typeof createArchiveDatabase>;

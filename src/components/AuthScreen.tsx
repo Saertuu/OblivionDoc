@@ -14,7 +14,7 @@ import {
 import { Brand } from "./Brand";
 import {
   enterDemoProfile,
-  readDemoProfile,
+  hasDemoProfiles,
   registerDemoProfile,
   type DemoSession,
 } from "../auth/demoSession";
@@ -25,7 +25,7 @@ export function AuthScreen({
   onEnter: (session: DemoSession) => void;
 }) {
   const [mode, setMode] = useState<"register" | "login">(() =>
-    readDemoProfile() || location.hash === "#/login" ? "login" : "register",
+    hasDemoProfiles() || location.hash === "#/login" ? "login" : "register",
   );
   const [name, setName] = useState(""),
     [email, setEmail] = useState(""),
@@ -173,7 +173,7 @@ export function AuthScreen({
             </h1>
             <p>
               {mode === "register"
-                ? "Создайте демо-профиль и познакомьтесь с вашим архивом."
+                ? "Создайте демо-профиль и начните свой архив с чистого листа."
                 : "Продолжите работу с демо-профилем этого браузера."}
             </p>
           </div>
@@ -270,8 +270,9 @@ export function AuthScreen({
             <ArrowRight size={16} />
           </button>
           <p className="auth-storage-caption">
-            Гостевой доступ и демо-профиль открывают один локальный архив. Выход
-            из профиля не удаляет документы.
+            Каждый новый профиль получает пустой архив. Документы сохраняются
+            отдельно для каждого профиля; учебные примеры доступны гостю. Выход
+            не удаляет ваши данные.
           </p>
           <footer className="auth-footer">
             <span>© {new Date().getFullYear()} OblivionDoc</span>

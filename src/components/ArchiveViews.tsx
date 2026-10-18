@@ -70,6 +70,7 @@ export function DocumentTable({
   onDownload,
   busy,
   onReset,
+  emptyArchive = false,
 }: {
   documents: ArchiveDocument[];
   page: number;
@@ -78,6 +79,7 @@ export function DocumentTable({
   onDownload: (record: ArchiveDocument) => void;
   busy: boolean;
   onReset: () => void;
+  emptyArchive?: boolean;
 }) {
   const pageSize = 6,
     pages = Math.max(1, Math.ceil(documents.length / pageSize)),
@@ -87,9 +89,17 @@ export function DocumentTable({
     <>
       {!rows.length ? (
         <EmptyState
-          title="Документы не найдены"
-          description="Измените запрос или сбросьте фильтры. Новые документы можно добавить кнопкой вверху страницы."
-          action={{ label: "Сбросить фильтры", onClick: onReset }}
+          title={emptyArchive ? "Ваш архив пока пуст" : "Документы не найдены"}
+          description={
+            emptyArchive
+              ? "Добавьте свой первый документ кнопкой вверху страницы. Здесь будут только ваши файлы."
+              : "Измените запрос или сбросьте фильтры. Новые документы можно добавить кнопкой вверху страницы."
+          }
+          action={
+            emptyArchive
+              ? undefined
+              : { label: "Сбросить фильтры", onClick: onReset }
+          }
         />
       ) : (
         <div

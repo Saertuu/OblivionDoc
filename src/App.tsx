@@ -30,6 +30,7 @@ import {
 import { Brand } from "./components/Brand";
 import { AuthScreen } from "./components/AuthScreen";
 import {
+  archiveForSession,
   endDemoSession,
   initials,
   readDemoSession,
@@ -46,14 +47,7 @@ import {
   RetentionView,
   SettingsView,
 } from "./components/ArchiveViews";
-import {
-  changeStatus,
-  fileFor,
-  initialize,
-  recordExport,
-  removeDocument,
-  snapshot,
-} from "./archive/database";
+import { createArchiveDatabase } from "./archive/database";
 import {
   CATEGORIES,
   DEPARTMENTS,
@@ -93,9 +87,9 @@ function currentView(): View {
   const value = location.hash.replace("#/", "");
   return Object.hasOwn(TITLES, value) ? (value as View) : "documents";
 }
-function storedRole(): Role {
+function storedRole(key: string): Role {
   try {
-    const value = localStorage.getItem("obliviondoc-demo-role");
+    const value = localStorage.getItem(key);
     return value && Object.hasOwn(ROLES, value) ? (value as Role) : "archivist";
   } catch {
     return "archivist";
@@ -116,6 +110,7 @@ export function App() {
     );
   return (
     <ArchiveWorkspace
+      key={session.kind === "profile" ? session.profile.id : "guest"}
       session={session}
       onLogout={() => {
         endDemoSession();
@@ -133,11 +128,23 @@ function ArchiveWorkspace({
   session: DemoSession;
   onLogout: () => void;
 }) {
+  const [database] = useState(() =>
+    createArchiveDatabase(archiveForSession(session), session.kind === "guest"),
+  );
+  const {
+    snapshot,
+    initialize,
+    fileFor,
+    recordExport,
+    changeStatus,
+    removeDocument,
+  } = database;
   const profile = session.kind === "profile" ? session.profile : null;
   const [data, setData] = useState<Snapshot>({ documents: [], events: [] });
   const [loading, setLoading] = useState(true),
     [loadError, setLoadError] = useState("");
-  const [role, setRole] = useState<Role>(storedRole),
+  const roleKey = `obliviondoc-demo-role-${archiveForSession(session)}`;
+  const [role, setRole] = useState<Role>(() => storedRole(roleKey)),
     [view, setView] = useState<View>(currentView);
   const [theme, setTheme] = useState(
     document.documentElement.dataset.theme || "light",
@@ -161,7 +168,7 @@ function ArchiveWorkspace({
     channel = useRef<BroadcastChannel | null>(null);
   const refresh = useCallback(async () => {
     setData(await snapshot());
-  }, []);
+  }, [snapshot]);
   const start = useCallback(async () => {
     setLoading(true);
     setLoadError("");
@@ -172,7 +179,7 @@ function ArchiveWorkspace({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [initialize]);
   useEffect(() => {
     void start();
   }, [start]);
@@ -207,7 +214,9 @@ function ArchiveWorkspace({
   }, []);
   useEffect(() => {
     if (!("BroadcastChannel" in window)) return;
-    const bus = new BroadcastChannel("obliviondoc-changes");
+    const bus = new BroadcastChannel(
+      `obliviondoc-changes-${archiveForSession(session)}`,
+    );
     channel.current = bus;
     bus.onmessage = () => {
       refresh().catch((error) =>
@@ -229,13 +238,13 @@ function ArchiveWorkspace({
   }, [theme]);
   useEffect(() => {
     try {
-      localStorage.setItem("obliviondoc-demo-role", role);
+      localStorage.setItem(roleKey, role);
     } catch {
       /* Optional preference. */
     }
     setSelectedId(null);
     setPage(1);
-  }, [role]);
+  }, [role, roleKey]);
   useEffect(() => {
     if (!toast) return;
     const timer = setTimeout(() => setToast(undefined), 6500);
@@ -867,6 +876,7 @@ function ArchiveWorkspace({
                     </div>
                     <DocumentTable
                       documents={filtered}
+                      emptyArchive={data.documents.length === 0}
                       page={page}
                       setPage={setPage}
                       onOpen={(r) => setSelectedId(r.id)}
@@ -931,6 +941,7 @@ function ArchiveWorkspace({
       </div>
       {editing !== undefined && (
         <DocumentForm
+          database={database}
           defaultAuthor={profile?.name}
           key={editing?.id || "new"}
           existing={editing || undefined}
@@ -951,6 +962,7 @@ function ArchiveWorkspace({
       )}
       {selected && (
         <DocumentDrawer
+          database={database}
           record={selected}
           role={role}
           onClose={() => setSelectedId(null)}

@@ -11,12 +11,13 @@ import {
 } from "lucide-react";
 import { Dialog } from "./Dialog";
 import { canEdit, type ArchiveDocument, type Role } from "../archive/types";
-import { fileFor } from "../archive/database";
+import { type ArchiveDatabase } from "../archive/database";
 import { formatBytes, formatDate, retention } from "../archive/format";
 
 const PdfPreview = lazy(() => import("./PdfPreview"));
 
 export function DocumentDrawer({
+  database,
   record,
   role,
   onClose,
@@ -27,6 +28,7 @@ export function DocumentDrawer({
   onActivity,
   busy,
 }: {
+  database: ArchiveDatabase;
   record: ArchiveDocument;
   role: Role;
   onClose: () => void;
@@ -51,7 +53,7 @@ export function DocumentDrawer({
     setError("");
     (async () => {
       try {
-        const blob = await fileFor(record, role, "viewed");
+        const blob = await database.fileFor(record, role, "viewed");
         const ext = record.fileName.split(".").at(-1)?.toLowerCase();
         const text = ["txt", "csv"].includes(ext || "")
           ? await blob.slice(0, 200000).text()
@@ -77,7 +79,7 @@ export function DocumentDrawer({
       cancelled = true;
       if (url) URL.revokeObjectURL(url);
     };
-  }, [record.id, record.updatedAt, role, onActivity]);
+  }, [database, record.id, record.updatedAt, role, onActivity]);
   const term = retention(record.retainUntil);
   return (
     <Dialog
