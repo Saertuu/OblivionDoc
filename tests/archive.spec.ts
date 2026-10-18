@@ -5,6 +5,9 @@ import { readFile } from "node:fs/promises";
 const FIRST = "Об организации учебного процесса";
 async function ready(page: Page) {
   await page.goto("/");
+  await page
+    .getByRole("button", { name: "Открыть демоархив", exact: true })
+    .click();
   await expect(page.getByRole("heading", { level: 1 })).toHaveText(
     "Архив документов",
   );
@@ -385,6 +388,9 @@ test("storage failure is shown with recovery guidance", async ({ page }) => {
     });
   });
   await page.goto("/");
+  await page
+    .getByRole("button", { name: "Открыть демоархив", exact: true })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Архив пока недоступен" }),
   ).toBeVisible();

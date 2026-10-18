@@ -15,6 +15,7 @@ import {
   History,
   Info,
   LoaderCircle,
+  LogOut,
   Menu,
   Moon,
   Plus,
@@ -27,6 +28,14 @@ import {
   X,
 } from "lucide-react";
 import { Brand } from "./components/Brand";
+import { AuthScreen } from "./components/AuthScreen";
+import {
+  endDemoSession,
+  initials,
+  readDemoSession,
+  rememberDemoSession,
+  type DemoSession,
+} from "./auth/demoSession";
 import { Dialog } from "./components/Dialog";
 import { DocumentForm } from "./components/DocumentForms";
 import { DocumentDrawer } from "./components/DocumentDrawer";
@@ -94,6 +103,37 @@ function storedRole(): Role {
 }
 
 export function App() {
+  const [session, setSession] = useState<DemoSession | null>(readDemoSession);
+  if (!session)
+    return (
+      <AuthScreen
+        onEnter={(next) => {
+          rememberDemoSession(next);
+          location.hash = `/${currentView()}`;
+          setSession(next);
+        }}
+      />
+    );
+  return (
+    <ArchiveWorkspace
+      session={session}
+      onLogout={() => {
+        endDemoSession();
+        location.hash = "/login";
+        setSession(null);
+      }}
+    />
+  );
+}
+
+function ArchiveWorkspace({
+  session,
+  onLogout,
+}: {
+  session: DemoSession;
+  onLogout: () => void;
+}) {
+  const profile = session.kind === "profile" ? session.profile : null;
   const [data, setData] = useState<Snapshot>({ documents: [], events: [] });
   const [loading, setLoading] = useState(true),
     [loadError, setLoadError] = useState("");
@@ -371,7 +411,9 @@ export function App() {
         <div className="workspace-label">
           <span className="workspace-avatar">ОУ</span>
           <div>
-            <strong>Учебная организация</strong>
+            <strong title={profile?.organization}>
+              {profile?.organization || "Учебная организация"}
+            </strong>
             <span>Демонстрационный архив</span>
           </div>
         </div>
@@ -448,8 +490,28 @@ export function App() {
             <Settings2 size={18} />
             Настройки
           </a>
-          <div className="demo-user">
-            <span className="user-avatar">ДО</span>
+          <div className="demo-profile">
+            <span className="user-avatar">
+              {profile ? initials(profile.name) : "ГД"}
+            </span>
+            <div>
+              <strong title={profile?.name}>
+                {profile?.name || "Гостевой доступ"}
+              </strong>
+              <span title={profile?.email}>
+                {profile?.email || "Локальная демонстрация"}
+              </span>
+            </div>
+            <button
+              className="icon-button"
+              aria-label="Выйти из демоархива"
+              title="Выйти"
+              onClick={onLogout}
+            >
+              <LogOut size={17} />
+            </button>
+          </div>
+          <div className="demo-user demo-role-switch">
             <label>
               <span>Демо-роль</span>
               <select
@@ -869,6 +931,7 @@ export function App() {
       </div>
       {editing !== undefined && (
         <DocumentForm
+          defaultAuthor={profile?.name}
           key={editing?.id || "new"}
           existing={editing || undefined}
           role={role}

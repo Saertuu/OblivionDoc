@@ -13,11 +13,13 @@ import { formatBytes, offsetDate, today } from "../archive/format";
 
 export function DocumentForm({
   existing,
+  defaultAuthor,
   role,
   onClose,
   onSaved,
 }: {
   existing?: ArchiveDocument;
+  defaultAuthor?: string;
   role: Role;
   onClose: () => void;
   onSaved: (record: ArchiveDocument) => Promise<void>;
@@ -30,7 +32,7 @@ export function DocumentForm({
           number: "",
           category: "Приказы",
           department: "Учебный отдел",
-          author: "Демо-пользователь",
+          author: defaultAuthor || "Демо-пользователь",
           documentDate: today(),
           retainUntil: offsetDate(365),
           visibility: "all",
