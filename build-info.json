@@ -1,0 +1,38 @@
+{
+  "source_commit": "1cf0a67185ea0a257f017d03ec0914e183cd5a49",
+  "platform": "Windows 10/11 x64",
+  "filename": "OblivionDoc.exe",
+  "bytes": 23517466,
+  "sha256": "bc334d7eaca127ad9023dd37692cdec91d7b54576f8cc3c4d44fad340d99ddc1",
+  "checks": [
+    {
+      "ok": true,
+      "phase": "create",
+      "checks": [
+        "database_connected",
+        "new_account_is_empty",
+        "new_audit_is_empty",
+        "original_bytes_downloaded",
+        "duplicate_account_rejected",
+        "wrong_password_rejected",
+        "second_account_is_empty",
+        "cross_account_access_rejected",
+        "native_window_and_tcl_loaded"
+      ]
+    },
+    {
+      "ok": true,
+      "phase": "verify",
+      "checks": [
+        "database_connected",
+        "account_and_metadata_survive_restart",
+        "file_survives_restart",
+        "documents_xlsx_export",
+        "audit_xlsx_export",
+        "audit_persisted",
+        "native_window_and_tcl_loaded",
+        "native_document_table_loaded"
+      ]
+    }
+  ]
+}
